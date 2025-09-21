@@ -15,6 +15,12 @@ interface StabilityArtifact {
   seed: number;
 }
 
+// Allowed dimensions for SDXL 1.0 from the API error
+const ALLOWED_DIMENSIONS = [
+    [1024, 1024], [1152, 896], [1216, 832], [1344, 768],
+    [1536, 640], [640, 1536], [768, 1344], [832, 1216], [896, 1152]
+];
+
 // --- Helper Components ---
 
 const Spinner = () => (
@@ -26,7 +32,7 @@ const ImageInput = ({ title, onFileChange, id }: ImageInputProps) => (
     <label htmlFor={id} className="cursor-pointer text-center w-full h-full flex flex-col justify-center items-center">
       <h3 className="text-lg font-semibold text-white mb-2">{title}</h3>
       <div className="flex flex-col items-center">
-        <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-slate-500" fill="none" viewBox="0 0 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
         <span className="mt-2 text-sm text-slate-400">Click to upload</span>
@@ -47,9 +53,8 @@ export default function LogoPlacerPage() {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
 
-  // State for logo controls
-  const [logoSize, setLogoSize] = useState(15); // Percentage of canvas width
-  const [logoPosition, setLogoPosition] = useState({ x: 75, y: 80 }); // Percentage position
+  const [logoSize, setLogoSize] = useState(15);
+  const [logoPosition, setLogoPosition] = useState({ x: 75, y: 80 });
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -69,23 +74,19 @@ export default function LogoPlacerPage() {
     }
   };
 
-  // Effect to draw on the canvas whenever an image or control changes
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !productImage) return;
-    
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Set canvas dimensions to match product image for high quality
+    // Set preview canvas to match aspect ratio
     canvas.width = productImage.width;
     canvas.height = productImage.height;
 
-    // Draw product image
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(productImage, 0, 0);
 
-    // Draw logo image if it exists
     if (logoImage) {
       const logoWidth = canvas.width * (logoSize / 100);
       const logoHeight = logoImage.height * (logoWidth / logoImage.width);
@@ -95,9 +96,26 @@ export default function LogoPlacerPage() {
     }
   }, [productImage, logoImage, logoSize, logoPosition]);
 
+  // *** NEW FUNCTION to find the best API-allowed dimension ***
+  const findClosestAllowedSize = (width: number, height: number): [number, number] => {
+    const originalAspectRatio = width / height;
+    let bestMatch = ALLOWED_DIMENSIONS[0];
+    let minDiff = Infinity;
+
+    ALLOWED_DIMENSIONS.forEach(dim => {
+      const [allowedWidth, allowedHeight] = dim;
+      const allowedAspectRatio = allowedWidth / allowedHeight;
+      const diff = Math.abs(originalAspectRatio - allowedAspectRatio);
+      if (diff < minDiff) {
+        minDiff = diff;
+        bestMatch = dim;
+      }
+    });
+    return bestMatch as [number, number];
+  };
+
   const handleGenerate = async () => {
-    const canvas = canvasRef.current;
-    if (!canvas || !productImage || !logoImage) {
+    if (!productImage || !logoImage) {
       setError('Please upload both a product image and a logo.');
       return;
     }
@@ -105,25 +123,52 @@ export default function LogoPlacerPage() {
     setGeneratedImage('');
     setError('');
 
-    // Convert canvas content to a Blob
-    canvas.toBlob(async (blob) => {
+    // *** RESIZING LOGIC STARTS HERE ***
+    const [targetWidth, targetHeight] = findClosestAllowedSize(productImage.width, productImage.height);
+    const resizeCanvas = document.createElement('canvas');
+    resizeCanvas.width = targetWidth;
+    resizeCanvas.height = targetHeight;
+    const ctx = resizeCanvas.getContext('2d');
+    if (!ctx) {
+        setError("Failed to create canvas for resizing.");
+        setIsLoading(false);
+        return;
+    }
+
+    // Letterbox the product image onto the new canvas
+    ctx.fillStyle = '#111827'; // bg-slate-900
+    ctx.fillRect(0, 0, targetWidth, targetHeight);
+    const ratio = Math.min(targetWidth / productImage.width, targetHeight / productImage.height);
+    const newWidth = productImage.width * ratio;
+    const newHeight = productImage.height * ratio;
+    const offsetX = (targetWidth - newWidth) / 2;
+    const offsetY = (targetHeight - newHeight) / 2;
+    ctx.drawImage(productImage, offsetX, offsetY, newWidth, newHeight);
+
+    // Draw the logo on top at the correct scaled position
+    const logoWidth = newWidth * (logoSize / 100);
+    const logoHeight = logoImage.height * (logoWidth / logoImage.width);
+    const logoX = offsetX + newWidth * (logoPosition.x / 100) - logoWidth / 2;
+    const logoY = offsetY + newHeight * (logoPosition.y / 100) - logoHeight / 2;
+    ctx.drawImage(logoImage, logoX, logoY, logoWidth, logoHeight);
+    // *** RESIZING LOGIC ENDS HERE ***
+
+    resizeCanvas.toBlob(async (blob) => {
       if (!blob) {
-        setError('Could not process the combined image.');
+        setError('Could not process the resized image.');
         setIsLoading(false);
         return;
       }
 
       try {
         const apiKey = process.env.NEXT_PUBLIC_STABILITY_API_KEY;
-        if (!apiKey) {
-          throw new Error("Stability AI API key is not configured. Please set NEXT_PUBLIC_STABILITY_API_KEY in Vercel and redeploy.");
-        }
+        if (!apiKey) throw new Error("Stability AI API key not configured.");
 
         const formData = new FormData();
-        formData.append('init_image', blob); // The combined image from the canvas
+        formData.append('init_image', blob); // Send the new resized blob
         formData.append('text_prompts[0][text]', prompt);
         formData.append('init_image_mode', "IMAGE_STRENGTH");
-        formData.append('image_strength', "0.4"); // Lower strength to preserve more of the original
+        formData.append('image_strength', "0.4");
         formData.append('cfg_scale', '7');
         formData.append('samples', '1');
         formData.append('steps', '30');
@@ -145,18 +190,14 @@ export default function LogoPlacerPage() {
         const result: { artifacts: StabilityArtifact[] } = await response.json();
         const imageArtifact = result.artifacts?.[0];
 
-        if (imageArtifact && imageArtifact.finishReason === "SUCCESS") {
+        if (imageArtifact?.finishReason === "SUCCESS") {
           setGeneratedImage(`data:image/png;base64,${imageArtifact.base64}`);
         } else {
-          throw new Error('Image generation failed. The API did not return a successful image.');
+          throw new Error('Image generation failed or did not return a valid image.');
         }
       } catch (err) {
         console.error(err);
-        if (err instanceof Error) {
-          setError(err.message);
-        } else {
-          setError('An unexpected error occurred.');
-        }
+        setError(err instanceof Error ? err.message : 'An unexpected error occurred.');
       } finally {
         setIsLoading(false);
       }
@@ -172,7 +213,6 @@ export default function LogoPlacerPage() {
         </header>
 
         <main className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* LEFT COLUMN - CONTROLS */}
           <section className="bg-slate-800/30 p-6 rounded-xl shadow-lg flex flex-col gap-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <ImageInput title="1. Product Image" onFileChange={handleFileChange(setProductImage)} id="product-upload"/>
@@ -210,15 +250,14 @@ export default function LogoPlacerPage() {
             {error && <p className="text-red-400 text-center">{error}</p>}
           </section>
 
-          {/* RIGHT COLUMN - PREVIEW & RESULT */}
           <section className="bg-slate-800/30 p-6 rounded-xl shadow-lg flex flex-col items-center justify-center min-h-[500px]">
             <h2 className="text-2xl font-semibold mb-4 text-white">Live Preview & Result</h2>
             <div className="w-full h-full flex items-center justify-center bg-slate-800/50 rounded-lg border-2 border-dashed border-slate-600 p-2 aspect-w-1 aspect-h-1">
                 {isLoading && <Spinner/>}
                 {!isLoading && generatedImage && <img src={generatedImage} alt="Generated result" className="max-w-full max-h-full object-contain rounded-md"/>}
                 {!isLoading && !generatedImage && (
-                    <div className="relative w-full h-full">
-                        {!productImage && <p className="text-slate-500 text-center self-center absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">Upload images to begin</p>}
+                    <div className="relative w-full h-full flex items-center justify-center">
+                        {!productImage && <p className="text-slate-500 text-center">Upload images to begin</p>}
                         <canvas ref={canvasRef} className="max-w-full max-h-full object-contain rounded-md" style={{ display: productImage ? 'block' : 'none' }}/>
                     </div>
                 )}
