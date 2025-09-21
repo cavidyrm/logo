@@ -10,21 +10,13 @@ interface ImageInputProps {
   note?: string;
 }
 
-interface StabilityArtifact {
-  base64: string;
-  finishReason: string;
-  seed: number;
-}
-
-const ALLOWED_DIMENSIONS = [
-    [1024, 1024], [1152, 896], [1216, 832], [1344, 768],
-    [1536, 640], [640, 1536], [768, 1344], [832, 1216], [896, 1152]
-];
-
 // --- Helper Components ---
 
-const Spinner = () => (
-  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-sky-500"></div>
+const Spinner = ({ text }: { text: string }) => (
+    <div className="flex flex-col items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-sky-500"></div>
+        <span className="mt-3 text-slate-400">{text}</span>
+    </div>
 );
 
 const ImageInput = ({ title, onFileChange, id, note }: ImageInputProps) => (
@@ -46,35 +38,29 @@ const ImageInput = ({ title, onFileChange, id, note }: ImageInputProps) => (
 // --- Main Page Component ---
 export default function LogoPlacerPage() {
   const [productImage, setProductImage] = useState<HTMLImageElement | null>(null);
-  const [originalLogo, setOriginalLogo] = useState<HTMLImageElement | null>(null);
-  const [processedLogo, setProcessedLogo] = useState<HTMLImageElement | null>(null);
+  const [logoImage, setLogoImage] = useState<HTMLImageElement | null>(null);
   const [prompt, setPrompt] = useState<string>(
-    "Integrate the logo naturally into the background. Match the lighting, texture, and perspective of the scene. Add a subtle, realistic shadow. The main product must remain untouched. Do not change the shape or design of the logo."
+    "A photorealistic image. IMPORTANT: The logo provided has a solid background; make this background perfectly transparent before integrating the logo. Place the transparent logo naturally into the main image's background. Match lighting, texture, and perspective. Add a subtle shadow. Do not change the logo's design."
   );
   const [generatedImage, setGeneratedImage] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [loadingStatus, setLoadingStatus] = useState('');
   const [error, setError] = useState<string>('');
 
   const [logoSize, setLogoSize] = useState(15);
   const [logoPosition, setLogoPosition] = useState({ x: 75, y: 80 });
-  const [removeLogoBg, setRemoveLogoBg] = useState(true);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const handleFileChange = (
-    imageSetter: (img: HTMLImageElement | null) => void,
-    processedSetter?: (img: HTMLImageElement | null) => void
+    imageSetter: (img: HTMLImageElement | null) => void
   ) => (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
       reader.onload = (event) => {
         const img = new Image();
-        img.onload = () => {
-          imageSetter(img);
-          if(processedSetter) processedSetter(img); // Initially, processed logo is the same
-        }
+        img.crossOrigin = "anonymous";
+        img.onload = () => imageSetter(img);
         img.src = event.target?.result as string;
       };
       reader.readAsDataURL(file);
@@ -93,117 +79,101 @@ export default function LogoPlacerPage() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(productImage, 0, 0);
 
-    const logoToDraw = processedLogo || originalLogo;
-    if (logoToDraw) {
+    if (logoImage) {
       const logoWidth = canvas.width * (logoSize / 100);
-      const logoHeight = logoToDraw.height * (logoWidth / logoToDraw.width);
+      const logoHeight = logoImage.height * (logoWidth / logoImage.width);
       const x = canvas.width * (logoPosition.x / 100) - logoWidth / 2;
       const y = canvas.height * (logoPosition.y / 100) - logoHeight / 2;
-      ctx.drawImage(logoToDraw, x, y, logoWidth, logoHeight);
+      ctx.drawImage(logoImage, x, y, logoWidth, logoHeight);
     }
-  }, [productImage, originalLogo, processedLogo, logoSize, logoPosition]);
-
-  const findClosestAllowedSize = (width: number, height: number): [number, number] => {
-    const originalAspectRatio = width / height;
-    let bestMatch = ALLOWED_DIMENSIONS[0];
-    let minDiff = Infinity;
-
-    ALLOWED_DIMENSIONS.forEach(dim => {
-      const diff = Math.abs(originalAspectRatio - (dim[0] / dim[1]));
-      if (diff < minDiff) {
-        minDiff = diff;
-        bestMatch = dim;
-      }
-    });
-    return bestMatch as [number, number];
+  }, [productImage, logoImage, logoSize, logoPosition]);
+  
+  const blobToBase64 = (blob: Blob): Promise<string> => {
+      return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+              if (typeof reader.result === 'string') {
+                  resolve(reader.result.split(',')[1]);
+              } else {
+                  reject(new Error("Failed to convert blob to base64"));
+              }
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+      });
   };
 
   const handleGenerate = async () => {
-    if (!productImage || !originalLogo) {
-      setError('Please upload both a product image and a logo.');
+    if (!productImage || !logoImage) {
+      setError('Please upload both a product and a logo image.');
       return;
     }
     setIsLoading(true);
     setGeneratedImage('');
     setError('');
 
-    let finalLogoToComposite = originalLogo;
-
     try {
-      const apiKey = process.env.NEXT_PUBLIC_STABILITY_API_KEY;
-      if (!apiKey) throw new Error("Stability AI API key not configured.");
+      const targetWidth = 1024;
+      const targetHeight = 1024;
 
-      // Step 1: Optionally remove the logo background
-      if (removeLogoBg) {
-        setLoadingStatus('Removing logo background...');
-        const formData = new FormData();
-        const logoBlob = await (await fetch(originalLogo.src)).blob();
-        formData.append('image', logoBlob);
-
-        const eraseResponse = await fetch('https://api.stability.ai/v2beta/stable-image/edit/erase', {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
-            body: formData,
-        });
-
-        if (!eraseResponse.ok) throw new Error('Failed to remove logo background.');
-
-        const erasedResult = await eraseResponse.json();
-        const base64Data = erasedResult.image;
-        
-        const newLogo = new Image();
-        await new Promise<void>(resolve => {
-            newLogo.onload = () => resolve();
-            newLogo.src = `data:image/png;base64,${base64Data}`;
-        });
-        finalLogoToComposite = newLogo;
-        setProcessedLogo(newLogo);
-      }
-
-      setLoadingStatus('Integrating logo...');
-      // Step 2: Composite images and resize for the API
-      const [targetWidth, targetHeight] = findClosestAllowedSize(productImage.width, productImage.height);
-      const resizeCanvas = document.createElement('canvas');
-      resizeCanvas.width = targetWidth;
-      resizeCanvas.height = targetHeight;
-      const ctx = resizeCanvas.getContext('2d');
-      if (!ctx) throw new Error("Failed to create canvas for resizing.");
-
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(0, 0, targetWidth, targetHeight);
+      const imageCanvas = document.createElement('canvas');
+      imageCanvas.width = targetWidth;
+      imageCanvas.height = targetHeight;
+      const imageCtx = imageCanvas.getContext('2d');
+      if (!imageCtx) throw new Error("Could not create image canvas context.");
+      
+      imageCtx.fillStyle = '#000000';
+      imageCtx.fillRect(0, 0, targetWidth, targetHeight);
       const ratio = Math.min(targetWidth / productImage.width, targetHeight / productImage.height);
       const newWidth = productImage.width * ratio;
       const newHeight = productImage.height * ratio;
-      const offsetX = (targetWidth - newWidth) / 2;
-      const offsetY = (targetHeight - newHeight) / 2;
-      ctx.drawImage(productImage, offsetX, offsetY, newWidth, newHeight);
+      imageCtx.drawImage(productImage, (targetWidth - newWidth) / 2, (targetHeight - newHeight) / 2, newWidth, newHeight);
 
+      const maskCanvas = document.createElement('canvas');
+      maskCanvas.width = targetWidth;
+      maskCanvas.height = targetHeight;
+      const maskCtx = maskCanvas.getContext('2d');
+      if (!maskCtx) throw new Error("Could not create mask canvas context.");
+      
+      maskCtx.fillStyle = '#000000';
+      maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
       const logoWidth = newWidth * (logoSize / 100);
-      const logoHeight = finalLogoToComposite.height * (logoWidth / finalLogoToComposite.width);
-      const logoX = offsetX + newWidth * (logoPosition.x / 100) - logoWidth / 2;
-      const logoY = offsetY + newHeight * (logoPosition.y / 100) - logoHeight / 2;
-      ctx.drawImage(finalLogoToComposite, logoX, logoY, logoWidth, logoHeight);
+      const logoHeight = logoImage.height * (logoWidth / logoImage.width);
+      const logoX = (targetWidth - newWidth) / 2 + newWidth * (logoPosition.x / 100) - logoWidth / 2;
+      const logoY = (targetHeight - newHeight) / 2 + newHeight * (logoPosition.y / 100) - logoHeight / 2;
+      
+      maskCtx.fillStyle = '#FFFFFF';
+      maskCtx.drawImage(logoImage, logoX, logoY, logoWidth, logoHeight);
 
-      const blob = await new Promise<Blob | null>(resolve => resizeCanvas.toBlob(resolve, 'image/png'));
-      if (!blob) throw new Error('Could not create blob from canvas.');
+      const [imageBlob, maskBlob] = await Promise.all([
+        new Promise<Blob|null>(res => imageCanvas.toBlob(res, 'image/png')),
+        new Promise<Blob|null>(res => maskCanvas.toBlob(res, 'image/png'))
+      ]);
 
-      // Step 3: Call image-to-image to blend
-      const formData = new FormData();
-      formData.append('init_image', blob);
-      formData.append('text_prompts[0][text]', prompt);
-      formData.append('init_image_mode', "IMAGE_STRENGTH");
-      // HIGHER IMAGE STRENGTH TO PRESERVE LOGO
-      formData.append('image_strength', "0.65"); 
-      formData.append('cfg_scale', '7');
-      formData.append('samples', '1');
-      formData.append('steps', '30');
+      if (!imageBlob || !maskBlob) throw new Error("Could not create image blobs.");
+      
+      const [imageBase64, maskBase64] = await Promise.all([
+          blobToBase64(imageBlob),
+          blobToBase64(maskBlob)
+      ]);
 
-      const engineId = 'stable-diffusion-xl-1024-v1-0';
-      const apiUrl = `https://api.stability.ai/v1/generation/${engineId}/image-to-image`;
+      const apiToken = process.env.NEXT_PUBLIC_HUGGINGFACE_API_TOKEN;
+      if (!apiToken) throw new Error("Hugging Face API token is not configured.");
+
+      const model = "runwayml/stable-diffusion-inpainting";
+      const apiUrl = `https://api-inference.huggingface.co/models/${model}`;
+      
       const response = await fetch(apiUrl, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
-        body: formData,
+        headers: { 
+          'Authorization': `Bearer ${apiToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          prompt: prompt,
+          image: imageBase64,
+          mask_image: maskBase64,
+        }),
       });
 
       if (!response.ok) {
@@ -211,19 +181,13 @@ export default function LogoPlacerPage() {
         throw new Error(`API Error: ${response.statusText} - ${errorText}`);
       }
       
-      const result: { artifacts: StabilityArtifact[] } = await response.json();
-      const imageArtifact = result.artifacts?.[0];
-      if (imageArtifact?.finishReason === "SUCCESS") {
-        setGeneratedImage(`data:image/png;base64,${imageArtifact.base64}`);
-      } else {
-        throw new Error('Image integration failed.');
-      }
+      const resultBlob = await response.blob();
+      setGeneratedImage(URL.createObjectURL(resultBlob));
 
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An unexpected error occurred.');
     } finally {
       setIsLoading(false);
-      setLoadingStatus('');
     }
   };
 
@@ -232,30 +196,20 @@ export default function LogoPlacerPage() {
       <div className="container mx-auto p-4 sm:p-8">
         <header className="text-center mb-8">
           <h1 className="text-4xl sm:text-5xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-blue-500">AI Logo Placer</h1>
-          <p className="text-slate-400 mt-2">Powered by Stability AI</p>
+          <p className="text-slate-400 mt-2">Powered by Hugging Face</p>
         </header>
 
         <main className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <section className="bg-slate-800/30 p-6 rounded-xl shadow-lg flex flex-col gap-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <ImageInput title="1. Product Image" onFileChange={handleFileChange(setProductImage)} id="product-upload"/>
-              <ImageInput title="2. Logo Image" onFileChange={handleFileChange(setOriginalLogo, setProcessedLogo)} id="logo-upload" note="Transparent PNGs work best!"/>
+              <ImageInput title="2. Logo Image" onFileChange={handleFileChange(setLogoImage)} id="logo-upload" note="Transparent PNGs work best!"/>
             </div>
             
-            {originalLogo && (
-              <div className="bg-slate-800/50 p-4 rounded-lg flex items-center justify-between">
-                 <label htmlFor="remove-bg" className="font-semibold text-white">Remove Logo Background?</label>
-                 <label className="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" id="remove-bg" className="sr-only peer" checked={removeLogoBg} onChange={() => setRemoveLogoBg(!removeLogoBg)}/>
-                    <div className="w-11 h-6 bg-slate-700 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-500"></div>
-                </label>
-              </div>
-            )}
-
-            {productImage && originalLogo && (
+            {productImage && logoImage && (
               <div className="bg-slate-800/50 p-4 rounded-lg">
                 <h3 className="text-lg font-semibold mb-3">3. Adjust Logo</h3>
-                <div className="space-y-4">
+                 <div className="space-y-4">
                   <div>
                       <label className="block text-sm mb-1">Size ({logoSize}%)</label>
                       <input type="range" min="1" max="100" value={logoSize} onChange={(e) => setLogoSize(Number(e.target.value))} className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer"/>
@@ -277,8 +231,8 @@ export default function LogoPlacerPage() {
               <textarea id="prompt" value={prompt} onChange={(e) => setPrompt(e.target.value)} className="w-full h-24 p-3 bg-slate-800 border border-slate-600 rounded-lg focus:ring-2 focus:ring-sky-500 transition"/>
             </div>
 
-            <button onClick={handleGenerate} disabled={isLoading || !productImage || !originalLogo} className="w-full bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white font-bold py-3 px-4 rounded-lg shadow-md transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center h-12">
-              {isLoading ? <><Spinner /><span className="ml-3">{loadingStatus || 'Generating...'}</span></> : '✨ Generate Final Image'}
+            <button onClick={handleGenerate} disabled={isLoading || !productImage || !logoImage} className="w-full bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white font-bold py-3 px-4 rounded-lg shadow-md transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center h-12">
+              {isLoading ? <Spinner text="Integrating Image..." /> : '✨ Generate Final Image'}
             </button>
             {error && <p className="text-red-400 text-center">{error}</p>}
           </section>
@@ -286,7 +240,7 @@ export default function LogoPlacerPage() {
           <section className="bg-slate-800/30 p-6 rounded-xl shadow-lg flex flex-col items-center justify-center min-h-[500px]">
             <h2 className="text-2xl font-semibold mb-4 text-white">Live Preview & Result</h2>
             <div className="w-full h-full flex items-center justify-center bg-slate-800/50 rounded-lg border-2 border-dashed border-slate-600 p-2 aspect-w-1 aspect-h-1">
-                {isLoading && !generatedImage && <Spinner/>}
+                {isLoading && <Spinner text="AI is thinking..." />}
                 {generatedImage && <img src={generatedImage} alt="Generated result" className="max-w-full max-h-full object-contain rounded-md"/>}
                 {!isLoading && !generatedImage && (
                     <div className="relative w-full h-full flex items-center justify-center">
