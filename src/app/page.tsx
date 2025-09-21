@@ -3,7 +3,6 @@
 import { useState, ChangeEvent } from 'react';
 
 // --- TypeScript Type Definitions ---
-// This interface tells TypeScript the exact "shape" of the props for our component.
 interface ImageInputProps {
   title: string;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
@@ -11,21 +10,30 @@ interface ImageInputProps {
   id: string;
 }
 
+// Type for a part of the Gemini API response
+interface GeminiPart {
+  text?: string;
+  inlineData?: {
+    mimeType: string;
+    data: string;
+  };
+}
+
 // --- Helper Components ---
 
-// Simple loading spinner component
 const Spinner = () => (
   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-sky-500"></div>
 );
 
-// Component for the file input card. 
-// Notice the `: ImageInputProps` here. This is the crucial part that applies our type definition.
+// Reverted to use standard <img> tag to resolve build error
 const ImageInput = ({ title, onFileChange, previewUrl, id }: ImageInputProps) => (
   <div className="bg-slate-800/50 rounded-lg p-4 flex flex-col items-center justify-center border-2 border-dashed border-slate-600 h-64 w-full">
-    <label htmlFor={id} className="cursor-pointer text-center">
+    <label htmlFor={id} className="cursor-pointer text-center w-full h-full flex flex-col justify-center items-center">
       <h3 className="text-lg font-semibold text-white mb-2">{title}</h3>
       {previewUrl ? (
-        <img src={previewUrl} alt={`${title} preview`} className="max-h-40 rounded-md object-contain" />
+        <div className="relative w-full h-40">
+          <img src={previewUrl} alt={`${title} preview`} className="rounded-md w-full h-full object-contain" />
+        </div>
       ) : (
         <div className="flex flex-col items-center">
           <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -40,7 +48,6 @@ const ImageInput = ({ title, onFileChange, previewUrl, id }: ImageInputProps) =>
 );
 
 // --- Main Page Component ---
-
 export default function LogoPlacerPage() {
   const [productImage, setProductImage] = useState<File | null>(null);
   const [logoImage, setLogoImage] = useState<File | null>(null);
@@ -83,11 +90,6 @@ export default function LogoPlacerPage() {
       setError('Please upload both a product image and a logo.');
       return;
     }
-    if (!prompt) {
-        setError('Please provide a prompt to guide the AI.');
-        return;
-    }
-
     setIsLoading(true);
     setGeneratedImage('');
     setError('');
@@ -97,8 +99,7 @@ export default function LogoPlacerPage() {
       const logoBase64 = await fileToBase64(logoImage);
 
       const payload = {
-        contents: [
-          {
+        contents: [{
             parts: [
               { text: prompt },
               { inlineData: { mimeType: productImage.type, data: productBase64 } },
@@ -106,14 +107,11 @@ export default function LogoPlacerPage() {
             ],
           },
         ],
-        generationConfig: {
-            responseModalities: ['TEXT', 'IMAGE']
-        },
+        generationConfig: { responseModalities: ['TEXT', 'IMAGE'] },
       };
 
-      const apiKey = ""; // Canvas will provide the key
+      const apiKey = "";
       const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKey}`;
-
       const response = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -126,16 +124,23 @@ export default function LogoPlacerPage() {
       }
       
       const result = await response.json();
-      const base64Data = result?.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData)?.inlineData?.data;
+
+      const parts: GeminiPart[] = result?.candidates?.[0]?.content?.parts || [];
+      const imagePart = parts.find(p => p.inlineData);
+      const base64Data = imagePart?.inlineData?.data;
 
       if (base64Data) {
         setGeneratedImage(`data:image/png;base64,${base64Data}`);
       } else {
         throw new Error('No image data was returned from the API. The model may not have been able to fulfill the request.');
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
-      setError(err.message || 'An unexpected error occurred.');
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('An unexpected error occurred.');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -153,8 +158,8 @@ export default function LogoPlacerPage() {
           </p>
         </header>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          <div className="bg-slate-800/30 p-6 rounded-xl shadow-lg flex flex-col gap-6">
+        <main className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <section className="bg-slate-800/30 p-6 rounded-xl shadow-lg flex flex-col gap-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <ImageInput 
                     title="1. Product Image" 
@@ -189,11 +194,11 @@ export default function LogoPlacerPage() {
               {isLoading ? 'Generating...' : '✨ Generate Image'}
             </button>
             {error && <p className="text-red-400 text-center">{error}</p>}
-          </div>
+          </section>
 
-          <div className="bg-slate-800/30 p-6 rounded-xl shadow-lg flex flex-col items-center justify-center min-h-[400px]">
+          <section className="bg-slate-800/30 p-6 rounded-xl shadow-lg flex flex-col items-center justify-center min-h-[400px]">
             <h2 className="text-2xl font-semibold mb-4 text-white">Result</h2>
-            <div className="w-full h-full flex items-center justify-center bg-slate-800/50 rounded-lg border-2 border-dashed border-slate-600 p-4">
+            <div className="w-full h-full flex items-center justify-center bg-slate-800/50 rounded-lg border-2 border-dashed border-slate-600 p-4 min-h-[400px]">
               {isLoading && <Spinner />}
               {!isLoading && !generatedImage && (
                 <div className="text-center text-slate-500">
@@ -202,11 +207,13 @@ export default function LogoPlacerPage() {
                 </div>
               )}
               {generatedImage && (
-                <img src={generatedImage} alt="Generated result" className="max-w-full max-h-[500px] object-contain rounded-md" />
+                <div className="relative w-full h-full max-h-[500px]">
+                  <img src={generatedImage} alt="Generated result" className="rounded-md max-w-full max-h-full object-contain" />
+                </div>
               )}
             </div>
-          </div>
-        </div>
+          </section>
+        </main>
       </div>
     </div>
   );
