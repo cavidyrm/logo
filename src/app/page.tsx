@@ -25,7 +25,7 @@ const ImageInput = ({ title, onFileChange, id, note }: ImageInputProps) => (
       <h3 className="text-lg font-semibold text-white mb-2">{title}</h3>
       <div className="flex flex-col items-center">
         <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 002-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
         <span className="mt-2 text-sm text-slate-400">Click to upload</span>
         {note && <span className="mt-1 text-xs text-slate-500">{note}</span>}
@@ -113,6 +113,7 @@ export default function LogoPlacerPage() {
     setError('');
 
     try {
+      // Hugging face models often work best with square images.
       const targetWidth = 1024;
       const targetHeight = 1024;
 
@@ -160,7 +161,8 @@ export default function LogoPlacerPage() {
       const apiToken = process.env.NEXT_PUBLIC_HUGGINGFACE_API_TOKEN;
       if (!apiToken) throw new Error("Hugging Face API token is not configured.");
 
-      const model = "runwayml/stable-diffusion-inpainting";
+      // Switched to a more reliable inpainting model
+      const model = "stabilityai/stable-diffusion-2-inpainting";
       const apiUrl = `https://api-inference.huggingface.co/models/${model}`;
       
       const response = await fetch(apiUrl, {
