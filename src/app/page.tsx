@@ -2,6 +2,8 @@
 
 import { useState, ChangeEvent, useRef, useEffect } from 'react';
 
+// NOTE: The '@imgly/background-removal' library has been completely removed to fix the errors.
+
 // --- TypeScript Type Definitions ---
 interface ImageInputProps {
   title: string;
@@ -11,7 +13,6 @@ interface ImageInputProps {
 }
 
 // --- Helper Components ---
-
 const Spinner = ({ text }: { text: string }) => (
     <div className="flex flex-col items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-sky-500"></div>
@@ -40,7 +41,7 @@ export default function LogoPlacerPage() {
   const [productImage, setProductImage] = useState<HTMLImageElement | null>(null);
   const [logoImage, setLogoImage] = useState<HTMLImageElement | null>(null);
   const [prompt, setPrompt] = useState<string>(
-    "A photorealistic image. IMPORTANT: The logo provided has a solid background; make this background perfectly transparent before integrating the logo. Place the transparent logo naturally into the main image's background. Match lighting, texture, and perspective. Add a subtle shadow. Do not change the logo's design."
+    "A photorealistic image. The provided logo is on a solid background; make this background completely transparent before integrating the logo. Place the now-transparent logo naturally into the scene's background. Match the lighting, texture, and perspective. Add a subtle, realistic shadow. The main product must remain untouched. The logo's design must be perfectly preserved."
   );
   const [generatedImage, setGeneratedImage] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -60,7 +61,9 @@ export default function LogoPlacerPage() {
       reader.onload = (event) => {
         const img = new Image();
         img.crossOrigin = "anonymous";
-        img.onload = () => imageSetter(img);
+        img.onload = () => {
+          imageSetter(img);
+        };
         img.src = event.target?.result as string;
       };
       reader.readAsDataURL(file);
@@ -87,25 +90,22 @@ export default function LogoPlacerPage() {
       ctx.drawImage(logoImage, x, y, logoWidth, logoHeight);
     }
   }, [productImage, logoImage, logoSize, logoPosition]);
-  
-  const blobToBase64 = (blob: Blob): Promise<string> => {
-      return new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onloadend = () => {
-              if (typeof reader.result === 'string') {
-                  resolve(reader.result.split(',')[1]);
-              } else {
-                  reject(new Error("Failed to convert blob to base64"));
-              }
-          };
-          reader.onerror = reject;
-          reader.readAsDataURL(blob);
-      });
+
+  const getCanvasBlob = (canvas: HTMLCanvasElement): Promise<Blob> => {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) {
+          resolve(blob);
+        } else {
+          reject(new Error("Canvas to Blob conversion failed"));
+        }
+      }, 'image/png');
+    });
   };
 
   const handleGenerate = async () => {
     if (!productImage || !logoImage) {
-      setError('Please upload both a product and a logo image.');
+      setError('Please upload images and wait for processing.');
       return;
     }
     setIsLoading(true);
@@ -113,69 +113,44 @@ export default function LogoPlacerPage() {
     setError('');
 
     try {
-      // Hugging face models often work best with square images.
-      const targetWidth = 1024;
-      const targetHeight = 1024;
-
-      const imageCanvas = document.createElement('canvas');
-      imageCanvas.width = targetWidth;
-      imageCanvas.height = targetHeight;
-      const imageCtx = imageCanvas.getContext('2d');
-      if (!imageCtx) throw new Error("Could not create image canvas context.");
-      
-      imageCtx.fillStyle = '#000000';
-      imageCtx.fillRect(0, 0, targetWidth, targetHeight);
-      const ratio = Math.min(targetWidth / productImage.width, targetHeight / productImage.height);
-      const newWidth = productImage.width * ratio;
-      const newHeight = productImage.height * ratio;
-      imageCtx.drawImage(productImage, (targetWidth - newWidth) / 2, (targetHeight - newHeight) / 2, newWidth, newHeight);
-
       const maskCanvas = document.createElement('canvas');
-      maskCanvas.width = targetWidth;
-      maskCanvas.height = targetHeight;
+      maskCanvas.width = productImage.width;
+      maskCanvas.height = productImage.height;
       const maskCtx = maskCanvas.getContext('2d');
       if (!maskCtx) throw new Error("Could not create mask canvas context.");
-      
+
       maskCtx.fillStyle = '#000000';
       maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
-      const logoWidth = newWidth * (logoSize / 100);
+      const logoWidth = maskCanvas.width * (logoSize / 100);
       const logoHeight = logoImage.height * (logoWidth / logoImage.width);
-      const logoX = (targetWidth - newWidth) / 2 + newWidth * (logoPosition.x / 100) - logoWidth / 2;
-      const logoY = (targetHeight - newHeight) / 2 + newHeight * (logoPosition.y / 100) - logoHeight / 2;
+      const logoX = maskCanvas.width * (logoPosition.x / 100) - logoWidth / 2;
+      const logoY = maskCanvas.height * (logoPosition.y / 100) - logoHeight / 2;
       
       maskCtx.fillStyle = '#FFFFFF';
-      maskCtx.drawImage(logoImage, logoX, logoY, logoWidth, logoHeight);
+      // Use fillRect for the mask to ensure the AI has a solid area to inpaint
+      maskCtx.fillRect(logoX, logoY, logoWidth, logoHeight);
 
       const [imageBlob, maskBlob] = await Promise.all([
-        new Promise<Blob|null>(res => imageCanvas.toBlob(res, 'image/png')),
-        new Promise<Blob|null>(res => maskCanvas.toBlob(res, 'image/png'))
+        fetch(productImage.src).then(res => res.blob()),
+        getCanvasBlob(maskCanvas)
       ]);
-
-      if (!imageBlob || !maskBlob) throw new Error("Could not create image blobs.");
       
-      const [imageBase64, maskBase64] = await Promise.all([
-          blobToBase64(imageBlob),
-          blobToBase64(maskBlob)
-      ]);
+      const accountId = process.env.NEXT_PUBLIC_CLOUDFLARE_ACCOUNT_ID;
+      const apiToken = process.env.NEXT_PUBLIC_CLOUDFLARE_API_TOKEN;
 
-      const apiToken = process.env.NEXT_PUBLIC_HUGGINGFACE_API_TOKEN;
-      if (!apiToken) throw new Error("Hugging Face API token is not configured.");
+      if (!accountId || !apiToken) throw new Error("Cloudflare credentials are not configured.");
 
-      // Switched to a more reliable inpainting model
-      const model = "stabilityai/stable-diffusion-2-inpainting";
-      const apiUrl = `https://api-inference.huggingface.co/models/${model}`;
+      const formData = new FormData();
+      formData.append('image', imageBlob);
+      formData.append('mask', maskBlob);
+      formData.append('prompt', prompt);
+      
+      const apiUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/stabilityai/stable-diffusion-xl-inpainting`;
       
       const response = await fetch(apiUrl, {
         method: 'POST',
-        headers: { 
-          'Authorization': `Bearer ${apiToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          prompt: prompt,
-          image: imageBase64,
-          mask_image: maskBase64,
-        }),
+        headers: { 'Authorization': `Bearer ${apiToken}` },
+        body: formData,
       });
 
       if (!response.ok) {
@@ -198,7 +173,7 @@ export default function LogoPlacerPage() {
       <div className="container mx-auto p-4 sm:p-8">
         <header className="text-center mb-8">
           <h1 className="text-4xl sm:text-5xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-blue-500">AI Logo Placer</h1>
-          <p className="text-slate-400 mt-2">Powered by Hugging Face</p>
+          <p className="text-slate-400 mt-2">Powered by Cloudflare AI</p>
         </header>
 
         <main className="grid grid-cols-1 lg:grid-cols-2 gap-8">
