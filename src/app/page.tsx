@@ -183,14 +183,15 @@ export default function LogoPlacerPage() {
       });
 
       if (!response.ok) {
-        // More robust error handling to prevent JSON.parse error
+        // Corrected error handling to prevent "body already consumed" error.
+        const errorText = await response.text(); // Read body once as text
         let errorMessage = `API Error (${response.status}): ${response.statusText}`;
         try {
-          const errorData = await response.json();
+          // Try to parse the text as JSON
+          const errorData = JSON.parse(errorText);
           errorMessage = errorData.error || errorMessage;
         } catch (e) {
-          // If the response is not JSON, use the raw text body
-          const errorText = await response.text();
+          // If it's not JSON, use the raw text
           if (errorText) {
             errorMessage = errorText;
           }
