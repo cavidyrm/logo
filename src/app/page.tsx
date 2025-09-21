@@ -12,6 +12,13 @@ interface ImageInputProps {
   note?: string;
 }
 
+// --- ADDED: Allowed dimensions for the Cloudflare SDXL model ---
+const ALLOWED_DIMENSIONS = [
+    [1024, 1024], [1152, 896], [1216, 832], [1344, 768],
+    [1536, 640], [640, 1536], [768, 1344], [832, 1216], [896, 1152]
+];
+
+
 // --- Helper Components ---
 const Spinner = ({ text }: { text: string }) => (
     <div className="flex flex-col items-center justify-center">
@@ -41,7 +48,7 @@ export default function LogoPlacerPage() {
   const [productImage, setProductImage] = useState<HTMLImageElement | null>(null);
   const [logoImage, setLogoImage] = useState<HTMLImageElement | null>(null);
   const [prompt, setPrompt] = useState<string>(
-    "A photorealistic image. The provided logo is on a solid background; make this background completely transparent before integrating the logo. Place the now-transparent logo naturally into the scene's background. Match the lighting, texture, and perspective. Add a subtle, realistic shadow. The main product must remain untouched. The logo's design must be perfectly preserved."
+    "A photorealistic image. The provided logo is on a solid background; make this background completely transparent before integrating the logo. Place the now-transparent logo naturally into the scene's background. Match the lighting, texture, and perspective. Add a subtle, realistic shadow. The main product must remain untouched. The logo's design is perfectly preserved."
   );
   const [generatedImage, setGeneratedImage] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -103,6 +110,23 @@ export default function LogoPlacerPage() {
     });
   };
 
+  // --- ADDED: Helper function to find the best API-allowed size ---
+  const findClosestAllowedSize = (width: number, height: number): [number, number] => {
+    const originalAspectRatio = width / height;
+    let bestMatch = ALLOWED_DIMENSIONS[0];
+    let minDiff = Infinity;
+
+    ALLOWED_DIMENSIONS.forEach(dim => {
+      const allowedAspectRatio = dim[0] / dim[1];
+      const diff = Math.abs(originalAspectRatio - allowedAspectRatio);
+      if (diff < minDiff) {
+        minDiff = diff;
+        bestMatch = dim;
+      }
+    });
+    return bestMatch as [number, number];
+  };
+
   const handleGenerate = async () => {
     if (!productImage || !logoImage) {
       setError('Please upload images and wait for processing.');
@@ -113,32 +137,43 @@ export default function LogoPlacerPage() {
     setError('');
 
     try {
-      // Create a canvas for the product image to reliably get a blob
+      // --- ADDED: Resizing logic to match API requirements ---
+      const [targetWidth, targetHeight] = findClosestAllowedSize(productImage.width, productImage.height);
+      
       const imageCanvas = document.createElement('canvas');
-      imageCanvas.width = productImage.width;
-      imageCanvas.height = productImage.height;
+      imageCanvas.width = targetWidth;
+      imageCanvas.height = targetHeight;
       const imageCtx = imageCanvas.getContext('2d');
       if (!imageCtx) throw new Error("Could not create image canvas context.");
-      imageCtx.drawImage(productImage, 0, 0);
+
+      // Letterbox the product image onto the correctly sized canvas
+      imageCtx.fillStyle = '#000000'; // Fill with black for safety
+      imageCtx.fillRect(0, 0, targetWidth, targetHeight);
+      const ratio = Math.min(targetWidth / productImage.width, targetHeight / productImage.height);
+      const newWidth = productImage.width * ratio;
+      const newHeight = productImage.height * ratio;
+      const offsetX = (targetWidth - newWidth) / 2;
+      const offsetY = (targetHeight - newHeight) / 2;
+      imageCtx.drawImage(productImage, offsetX, offsetY, newWidth, newHeight);
 
       const maskCanvas = document.createElement('canvas');
-      maskCanvas.width = productImage.width;
-      maskCanvas.height = productImage.height;
+      maskCanvas.width = targetWidth;
+      maskCanvas.height = targetHeight;
       const maskCtx = maskCanvas.getContext('2d');
       if (!maskCtx) throw new Error("Could not create mask canvas context.");
 
       maskCtx.fillStyle = '#000000';
       maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
-      const logoWidth = maskCanvas.width * (logoSize / 100);
+      const logoWidth = newWidth * (logoSize / 100);
       const logoHeight = logoImage.height * (logoWidth / logoImage.width);
-      const logoX = maskCanvas.width * (logoPosition.x / 100) - logoWidth / 2;
-      const logoY = maskCanvas.height * (logoPosition.y / 100) - logoHeight / 2;
+      const logoX = offsetX + newWidth * (logoPosition.x / 100) - logoWidth / 2;
+      const logoY = offsetY + newHeight * (logoPosition.y / 100) - logoHeight / 2;
       
       maskCtx.fillStyle = '#FFFFFF';
       maskCtx.fillRect(logoX, logoY, logoWidth, logoHeight);
 
       const [imageBlob, maskBlob] = await Promise.all([
-        getCanvasBlob(imageCanvas), // Use canvas method instead of fetch
+        getCanvasBlob(imageCanvas), // Use blob from resized canvas
         getCanvasBlob(maskCanvas)
       ]);
       
