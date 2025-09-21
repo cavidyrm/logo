@@ -113,6 +113,14 @@ export default function LogoPlacerPage() {
     setError('');
 
     try {
+      // Create a canvas for the product image to reliably get a blob
+      const imageCanvas = document.createElement('canvas');
+      imageCanvas.width = productImage.width;
+      imageCanvas.height = productImage.height;
+      const imageCtx = imageCanvas.getContext('2d');
+      if (!imageCtx) throw new Error("Could not create image canvas context.");
+      imageCtx.drawImage(productImage, 0, 0);
+
       const maskCanvas = document.createElement('canvas');
       maskCanvas.width = productImage.width;
       maskCanvas.height = productImage.height;
@@ -127,11 +135,10 @@ export default function LogoPlacerPage() {
       const logoY = maskCanvas.height * (logoPosition.y / 100) - logoHeight / 2;
       
       maskCtx.fillStyle = '#FFFFFF';
-      // Use fillRect for the mask to ensure the AI has a solid area to inpaint
       maskCtx.fillRect(logoX, logoY, logoWidth, logoHeight);
 
       const [imageBlob, maskBlob] = await Promise.all([
-        fetch(productImage.src).then(res => res.blob()),
+        getCanvasBlob(imageCanvas), // Use canvas method instead of fetch
         getCanvasBlob(maskCanvas)
       ]);
       
