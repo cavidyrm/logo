@@ -183,8 +183,19 @@ export default function LogoPlacerPage() {
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'An unknown error occurred.');
+        // More robust error handling to prevent JSON.parse error
+        let errorMessage = `API Error (${response.status}): ${response.statusText}`;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+        } catch (e) {
+          // If the response is not JSON, use the raw text body
+          const errorText = await response.text();
+          if (errorText) {
+            errorMessage = errorText;
+          }
+        }
+        throw new Error(errorMessage);
       }
       
       const resultBlob = await response.blob();
