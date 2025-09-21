@@ -109,12 +109,10 @@ export default function LogoPlacerPage() {
         generationConfig: { responseModalities: ['TEXT', 'IMAGE'] },
       };
 
-      // *** THIS IS THE ONLY LINE THAT CHANGED ***
-      // It now securely reads the variable you set in Vercel.
       const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
       
       if (!apiKey) {
-        throw new Error("API key is not configured. Please set NEXT_PUBLIC_GEMINI_API_KEY environment variable.");
+        throw new Error("API key is not configured. Please check Vercel environment variables and redeploy.");
       }
 
       const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKey}`;
