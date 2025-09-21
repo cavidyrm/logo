@@ -25,7 +25,6 @@ const Spinner = () => (
   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-sky-500"></div>
 );
 
-// Reverted to use standard <img> tag to resolve build error
 const ImageInput = ({ title, onFileChange, previewUrl, id }: ImageInputProps) => (
   <div className="bg-slate-800/50 rounded-lg p-4 flex flex-col items-center justify-center border-2 border-dashed border-slate-600 h-64 w-full">
     <label htmlFor={id} className="cursor-pointer text-center w-full h-full flex flex-col justify-center items-center">
@@ -110,7 +109,14 @@ export default function LogoPlacerPage() {
         generationConfig: { responseModalities: ['TEXT', 'IMAGE'] },
       };
 
-      const apiKey = "";
+      // *** THIS IS THE ONLY LINE THAT CHANGED ***
+      // It now securely reads the variable you set in Vercel.
+      const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+      
+      if (!apiKey) {
+        throw new Error("API key is not configured. Please set NEXT_PUBLIC_GEMINI_API_KEY environment variable.");
+      }
+
       const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKey}`;
       const response = await fetch(apiUrl, {
         method: 'POST',
@@ -218,4 +224,3 @@ export default function LogoPlacerPage() {
     </div>
   );
 }
-
